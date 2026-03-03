@@ -1,0 +1,78 @@
+#!/usr/bin/env expect
+# Test the "ask" flow with Claude Code interactively
+
+set timeout 60
+set capture_dir [lindex $argv 0]
+if {$capture_dir eq ""} {
+    set capture_dir ".test/captures"
+}
+
+log_file -noappend "$capture_dir/expect.log"
+
+# Start Claude with our ask hook
+spawn env HOOKS_CAPTURE_DIR=$capture_dir claude --settings .test/fixtures/pretooluse-ask-hooks.json
+
+# Wait for initial prompt
+expect {
+    -re {❯|>} {
+        send_log "\n=== Got prompt ===\n"
+    }
+    timeout {
+        send_log "\n=== Timeout waiting for prompt ===\n"
+        exit 1
+    }
+}
+
+sleep 2
+
+# Send command
+send "run this bash command: echo ASKTEST\r"
+send_log "\n=== Sent command ===\n"
+
+# Wait for permission dialog - look for "requires confirmation" or "Yes/No"
+expect {
+    -re {requires confirmation|Do you want to proceed|Yes.*No} {
+        send_log "\n=== Got permission dialog ===\n"
+        sleep 1
+        # Select "Yes" - send 1 or y or enter (depending on UI)
+        send "1"
+        send_log "\n=== Sent 1 for Yes ===\n"
+        sleep 1
+        send "\r"
+        send_log "\n=== Sent enter ===\n"
+    }
+    timeout {
+        send_log "\n=== Timeout waiting for permission dialog ===\n"
+    }
+}
+
+# Wait for command to complete and potential second hook call
+sleep 5
+
+# Check if we see the output
+expect {
+    -re {ASKTEST} {
+        send_log "\n=== Saw command output ===\n"
+    }
+    timeout {
+        send_log "\n=== Timeout waiting for output ===\n"
+    }
+}
+
+# Wait more for any second hook invocation
+sleep 3
+
+# Exit
+send "/exit\r"
+send_log "\n=== Sent exit ===\n"
+
+expect {
+    eof {
+        send_log "\n=== Done ===\n"
+    }
+    timeout {
+        close
+    }
+}
+
+exit 0

@@ -158,3 +158,80 @@ HOOK
   run "$TEST_TEMP_DIR/error_hook.sh"
   assert_failure 2
 }
+
+# =============================================================================
+# "Ask" decision flow exploration
+# =============================================================================
+
+@test "hook can return ask decision with reason" {
+  cat > "$TEST_TEMP_DIR/ask_hook.sh" << 'HOOK'
+#!/usr/bin/env sh
+cat > /dev/null  # consume stdin
+echo '{"decision": "ask", "reason": "Confirm dangerous operation?"}'
+exit 0
+HOOK
+  chmod +x "$TEST_TEMP_DIR/ask_hook.sh"
+
+  run "$TEST_TEMP_DIR/ask_hook.sh" < /dev/null
+  assert_success
+
+  decision=$(echo "$output" | jq -r '.decision')
+  assert_equal "$decision" "ask"
+
+  reason=$(echo "$output" | jq -r '.reason')
+  assert_equal "$reason" "Confirm dangerous operation?"
+}
+
+@test "ask hook that tracks invocation count" {
+  # This hook tracks how many times it's been called
+  # If Claude re-invokes after user approval, we'd see count > 1
+  cat > "$TEST_TEMP_DIR/counting_ask_hook.sh" << HOOK
+#!/usr/bin/env sh
+COUNT_FILE="$TEST_TEMP_DIR/invocation_count"
+STDIN_DIR="$TEST_TEMP_DIR/stdin_captures"
+
+mkdir -p "\$STDIN_DIR"
+
+# Increment counter
+if [ -f "\$COUNT_FILE" ]; then
+  COUNT=\$(cat "\$COUNT_FILE")
+  COUNT=\$((COUNT + 1))
+else
+  COUNT=1
+fi
+echo "\$COUNT" > "\$COUNT_FILE"
+
+# Capture this invocation's stdin
+cat > "\$STDIN_DIR/invocation_\${COUNT}.json"
+
+# First call: ask. Subsequent calls: allow
+if [ "\$COUNT" -eq 1 ]; then
+  echo '{"decision": "ask", "reason": "First invocation - asking"}'
+else
+  echo '{"decision": "allow", "note": "Subsequent invocation"}'
+fi
+exit 0
+HOOK
+  chmod +x "$TEST_TEMP_DIR/counting_ask_hook.sh"
+
+  # First invocation - should ask
+  echo '{"call": 1}' | "$TEST_TEMP_DIR/counting_ask_hook.sh" > "$TEST_TEMP_DIR/response1.json"
+
+  decision1=$(jq -r '.decision' "$TEST_TEMP_DIR/response1.json")
+  assert_equal "$decision1" "ask"
+
+  # Simulate second invocation (as if user approved)
+  echo '{"call": 2, "user_approved": true}' | "$TEST_TEMP_DIR/counting_ask_hook.sh" > "$TEST_TEMP_DIR/response2.json"
+
+  decision2=$(jq -r '.decision' "$TEST_TEMP_DIR/response2.json")
+  assert_equal "$decision2" "allow"
+
+  # Verify both stdin captures exist
+  assert [ -f "$TEST_TEMP_DIR/stdin_captures/invocation_1.json" ]
+  assert [ -f "$TEST_TEMP_DIR/stdin_captures/invocation_2.json" ]
+
+  # Check what was passed on second invocation
+  run jq -r '.user_approved' "$TEST_TEMP_DIR/stdin_captures/invocation_2.json"
+  # Note: This is what WE passed. Real test is: what does Claude pass?
+  assert_equal "$output" "true"
+}

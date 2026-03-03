@@ -1,5 +1,6 @@
 # Test dependencies (installed via make install-bats)
 .test/bats/
+.test/captures/
 .direnv/
 
 # Build artifacts
