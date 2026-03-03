@@ -1,0 +1,10 @@
+# Test dependencies (installed via make install-bats)
+.test/bats/
+.direnv/
+
+# Build artifacts
+bin/
+
+# Editor
+*.swp
+*~
